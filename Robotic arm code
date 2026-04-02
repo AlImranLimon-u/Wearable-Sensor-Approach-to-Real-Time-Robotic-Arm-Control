@@ -1,0 +1,232 @@
+#include "HCPCA9685.h"
+#include <SoftwareSerial.h>
+
+#define I2CAdd 0x40
+
+SoftwareSerial BT(8, 9);
+HCPCA9685 HCPCA9685(I2CAdd);
+
+// ---------------- INITIAL POSITIONS ----------------
+const int servo_joint_L_parking_pos = 300;
+const int servo_joint_R_parking_pos = 60;
+const int servo_joint_1_parking_pos = 120;
+const int servo_joint_2_parking_pos = 0;
+const int servo_joint_3_parking_pos = 150;
+const int servo_joint_4_parking_pos = 100;
+
+// Mirror reference
+const int servo_joint_L_initial = 300;
+const int servo_joint_R_initial = 60;
+
+// ---------------- INCREMENTS ----------------
+int servo_joint_L_pos_increment = 10;
+int servo_joint_1_pos_increment = 10;
+int servo_joint_2_pos_increment = 10;
+//int servo_joint_3_pos_increment = 40;
+int servo_joint_4_pos_increment = 10;
+
+// ---------------- CURRENT POSITIONS ----------------
+int servo_joint_L_parking_pos_i = servo_joint_L_parking_pos;
+int servo_joint_R_parking_pos_i = servo_joint_R_parking_pos;
+int servo_joint_1_parking_pos_i = servo_joint_1_parking_pos;
+int servo_joint_2_parking_pos_i = servo_joint_2_parking_pos;
+//int servo_joint_3_parking_pos_i = servo_joint_3_parking_pos;
+int servo_joint_4_parking_pos_i = servo_joint_4_parking_pos;
+
+// ---------------- LIMITS ----------------
+int servo_joint_L_min_pos = 0;
+int servo_joint_L_max_pos = 360;
+
+int servo_joint_R_min_pos = 0;
+int servo_joint_R_max_pos = 360;
+
+int servo_joint_1_min_pos = 00;
+int servo_joint_1_max_pos = 360;
+
+int servo_joint_2_min_pos = 0;
+int servo_joint_2_max_pos = 360;
+
+//int servo_joint_3_min_pos = 10;
+//int servo_joint_3_max_pos = 380;
+
+int servo_joint_4_min_pos = 0;
+int servo_joint_4_max_pos = 360;
+
+// ---------------- FILTER ----------------
+#define FILTER_SIZE 5
+
+int elbowBuffer[FILTER_SIZE] = {0};
+int bufferIndex = 0;
+int bufferSum = 0;
+
+int getFilteredIncrement(int newVal) {
+  bufferSum -= elbowBuffer[bufferIndex];
+  elbowBuffer[bufferIndex] = newVal;
+  bufferSum += newVal;
+
+  bufferIndex++;
+  if (bufferIndex >= FILTER_SIZE) bufferIndex = 0;
+
+  return bufferSum / FILTER_SIZE;
+}
+
+// ---------------- CONTROL ----------------
+char state = 0;
+int response_time = 5;
+
+// ---------------- STEPPER ----------------
+const int dirPin = 4;
+const int stepPin = 5;
+const int stepsPerRevolution = 120;
+int stepDelay = 4500;
+
+// ---------------- SETUP ----------------
+void setInitialPositions() {
+  HCPCA9685.Servo(0, servo_joint_L_parking_pos_i);
+  HCPCA9685.Servo(1, servo_joint_R_parking_pos_i);
+  HCPCA9685.Servo(2, servo_joint_1_parking_pos_i);
+  HCPCA9685.Servo(3, servo_joint_2_parking_pos_i);
+  //HCPCA9685.Servo(4, servo_joint_3_parking_pos_i);
+  HCPCA9685.Servo(5, servo_joint_4_parking_pos_i);
+}
+
+void setup() {
+  pinMode(stepPin, OUTPUT);
+  pinMode(dirPin, OUTPUT);
+
+  HCPCA9685.Init(SERVO_MODE);
+  HCPCA9685.Sleep(false);
+
+  Serial.begin(4800);
+  BT.begin(4800);
+
+  delay(1000);
+
+  setInitialPositions();
+  delay(1000);
+
+  Serial.println("Receiver Ready");
+}
+
+// ---------------- LOOP ----------------
+void loop() {
+  if (BT.available()) {
+    state = BT.read();
+
+    if (state == 'T') baseRotateLeft();
+    else if (state == 'F') baseRotateRight();
+
+    else if (state == 'G') shoulderServoForward();
+    else if (state == 'U') shoulderServoBackward();
+
+    else if (state == 'L') elbowServoForward();
+    else if (state == 'R') elbowServoBackward();
+
+    else if (state == 'c') wristServo1Backward();
+    else if (state == 'C') wristServo1Forward();
+
+    else if (state == 'Q') gripperServoBackward();
+    else if (state == 'q') gripperServoForward();
+  }
+}
+
+// ---------------- ELBOW (MIRROR + FILTER) ----------------
+void elbowServoForward() {
+  if (servo_joint_L_parking_pos_i < servo_joint_L_max_pos) {
+
+    int filteredInc = getFilteredIncrement(servo_joint_L_pos_increment);
+
+    servo_joint_L_parking_pos_i += filteredInc;
+
+    servo_joint_R_parking_pos_i =
+      servo_joint_R_initial - (servo_joint_L_parking_pos_i - servo_joint_L_initial);
+
+    servo_joint_R_parking_pos_i =
+      constrain(servo_joint_R_parking_pos_i, servo_joint_R_min_pos, servo_joint_R_max_pos);
+
+    HCPCA9685.Servo(0, servo_joint_L_parking_pos_i);
+    HCPCA9685.Servo(1, servo_joint_R_parking_pos_i);
+
+    delay(response_time);
+  }
+}
+
+void elbowServoBackward() {
+  if (servo_joint_L_parking_pos_i > servo_joint_L_min_pos) {
+
+    int filteredInc = getFilteredIncrement(servo_joint_L_pos_increment);
+
+    servo_joint_L_parking_pos_i -= filteredInc;
+
+    servo_joint_R_parking_pos_i =
+      servo_joint_R_initial - (servo_joint_L_parking_pos_i - servo_joint_L_initial);
+
+    servo_joint_R_parking_pos_i =
+      constrain(servo_joint_R_parking_pos_i, servo_joint_R_min_pos, servo_joint_R_max_pos);
+
+    HCPCA9685.Servo(0, servo_joint_L_parking_pos_i);
+    HCPCA9685.Servo(1, servo_joint_R_parking_pos_i);
+
+    delay(response_time);
+  }
+}
+
+// ---------------- SHOULDER ----------------
+void shoulderServoForward() {
+  servo_joint_1_parking_pos_i += servo_joint_1_pos_increment;
+  servo_joint_1_parking_pos_i = constrain(servo_joint_1_parking_pos_i, servo_joint_1_min_pos, servo_joint_1_max_pos);
+  HCPCA9685.Servo(2, servo_joint_1_parking_pos_i);
+}
+
+void shoulderServoBackward() {
+  servo_joint_1_parking_pos_i -= servo_joint_1_pos_increment;
+  servo_joint_1_parking_pos_i = constrain(servo_joint_1_parking_pos_i, servo_joint_1_min_pos, servo_joint_1_max_pos);
+  HCPCA9685.Servo(2, servo_joint_1_parking_pos_i);
+}
+
+// ---------------- WRIST ----------------
+void wristServo1Forward() {
+  servo_joint_2_parking_pos_i += servo_joint_2_pos_increment;
+  servo_joint_2_parking_pos_i = constrain(servo_joint_2_parking_pos_i, servo_joint_2_min_pos, servo_joint_2_max_pos);
+  HCPCA9685.Servo(3, servo_joint_2_parking_pos_i);
+}
+
+void wristServo1Backward() {
+  servo_joint_2_parking_pos_i -= servo_joint_2_pos_increment;
+  servo_joint_2_parking_pos_i = constrain(servo_joint_2_parking_pos_i, servo_joint_2_min_pos, servo_joint_2_max_pos);
+  HCPCA9685.Servo(3, servo_joint_2_parking_pos_i);
+}
+
+// ---------------- GRIPPER ----------------
+void gripperServoForward() {
+  servo_joint_4_parking_pos_i -= servo_joint_4_pos_increment;
+  servo_joint_4_parking_pos_i = constrain(servo_joint_4_parking_pos_i, servo_joint_4_min_pos, servo_joint_4_max_pos);
+  HCPCA9685.Servo(5, servo_joint_4_parking_pos_i);
+}
+
+void gripperServoBackward() {
+  servo_joint_4_parking_pos_i += servo_joint_4_pos_increment;
+  servo_joint_4_parking_pos_i = constrain(servo_joint_4_parking_pos_i, servo_joint_4_min_pos, servo_joint_4_max_pos);
+  HCPCA9685.Servo(5, servo_joint_4_parking_pos_i);
+}
+
+// ---------------- STEPPER ----------------
+void baseRotateLeft() {
+  digitalWrite(dirPin, HIGH);
+  for (int i = 0; i < stepsPerRevolution; i++) {
+    digitalWrite(stepPin, HIGH);
+    delayMicroseconds(stepDelay);
+    digitalWrite(stepPin, LOW);
+    delayMicroseconds(stepDelay);
+  }
+}
+
+void baseRotateRight() {
+  digitalWrite(dirPin, LOW);
+  for (int i = 0; i < stepsPerRevolution; i++) {
+    digitalWrite(stepPin, HIGH);
+    delayMicroseconds(stepDelay);
+    digitalWrite(stepPin, LOW);
+    delayMicroseconds(stepDelay);
+  }
+}
