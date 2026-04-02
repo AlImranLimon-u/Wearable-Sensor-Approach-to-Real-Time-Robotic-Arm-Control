@@ -1,0 +1,290 @@
+#include <Wire.h>
+#include <SoftwareSerial.h>
+
+// ---------------- Bluetooth ----------------
+SoftwareSerial BT(8, 9);   // Arduino RX, TX
+
+// ---------------- Flex sensors ----------------
+int pinkie = 0;
+int finger = 0;
+int thumb = 0;
+
+int pinkie_Data = A1;
+int finger_Data = A2;
+int thumb_Data  = A3;
+
+// ---------------- MPU addresses ----------------
+const int MPU2 = 0x69;
+const int MPU1 = 0x68;
+
+// ---------------- First MPU6050 ----------------
+int16_t AcX1, AcY1, AcZ1, Tmp1, GyX1, GyY1, GyZ1;
+int minVal = 265;
+int maxVal = 402;
+double x;
+double y;
+double z;
+
+// ---------------- Second MPU6050 ----------------
+int16_t AcX2, AcY2, AcZ2, Tmp2, GyX2, GyY2, GyZ2;
+int minVal2 = 265;
+int maxVal2 = 402;
+double x2;
+double y2;
+double z2;
+
+// ---------------- Flex thresholds ----------------
+int thumb_high = 0;
+int thumb_low = 0;
+int finger_high = 0;
+int finger_low = 0;
+int pinkie_high = 0;
+int pinkie_low = 0;
+
+// Stop calibrating after done
+bool bool_caliberate = false;
+
+// How often to send values
+int response_time = 100;
+
+// ---------------- Helper ----------------
+void sendCommand(char cmd) {
+  BT.write(cmd);          // send to HC-05
+  Serial.print("SENT: "); // show in Serial Monitor
+  Serial.println(cmd);
+}
+
+void setup() {
+  pinMode(3, OUTPUT);
+
+  Wire.begin();
+
+  // Wake MPU1
+  Wire.beginTransmission(MPU1);
+  Wire.write(0x6B);
+  Wire.write(0);
+  Wire.endTransmission(true);
+
+  // Wake MPU2
+  Wire.beginTransmission(MPU2);
+  Wire.write(0x6B);
+  Wire.write(0);
+  Wire.endTransmission(true);
+
+  Serial.begin(4800);   // Serial Monitor
+  BT.begin(4800);       // HC-05
+
+  delay(1000);
+  Serial.println("Transmitter Started");
+}
+
+void loop() {
+  digitalWrite(3, HIGH);   // LED indicator
+
+  // Read both MPUs
+  GetMpuValue1(MPU1);
+  delay(10);
+  GetMpuValue2(MPU2);
+  delay(10);
+
+  // Read flex sensors
+  pinkie = analogRead(pinkie_Data);
+  finger = analogRead(finger_Data);
+  thumb  = analogRead(thumb_Data);
+
+  // One-time flex calibration
+  if (bool_caliberate == false) {
+    delay(1000);
+
+    thumb_high  = thumb + 28;
+    thumb_low   = thumb - 28;
+
+    finger_high = finger + 28;
+    finger_low  = finger - 28;
+
+    pinkie_high = pinkie + 12;
+    pinkie_low  = pinkie - 12;
+
+    bool_caliberate = true;
+
+    Serial.println("FLEX CALIBRATED");
+    Serial.print("Thumb range: ");  Serial.print(thumb_low);  Serial.print(" to "); Serial.println(thumb_high);
+    Serial.print("Finger range: "); Serial.print(finger_low); Serial.print(" to "); Serial.println(finger_high);
+    Serial.print("Pinkie range: "); Serial.print(pinkie_low); Serial.print(" to "); Serial.println(pinkie_high);
+    Serial.println("----------------------------------");
+  }
+
+  // Show sensor values in Serial Monitor
+  Serial.print("MPU1 x=");
+  Serial.print(x, 2);
+  Serial.print(" y=");
+  Serial.print(y, 2);
+  Serial.print(" z=");
+  Serial.print(z, 2);
+
+  Serial.print(" | MPU2 x2=");
+  Serial.print(x2, 2);
+  Serial.print(" y2=");
+  Serial.print(y2, 2);
+  Serial.print(" z2=");
+  Serial.print(z2, 2);
+
+  Serial.print(" | FLEX T=");
+  Serial.print(thumb);
+  Serial.print(" F=");
+  Serial.print(finger);
+  Serial.print(" P=");
+  Serial.println(pinkie);
+
+  // ---------------- Send commands ----------------
+  // Note: kept your original separate if-statements
+
+  // Move Left  (elbow)
+  if (x > 15 && x < 55 && y < 30) {
+    sendCommand('L');
+    delay(response_time);
+  }
+
+  // Move Right
+  if (x < 310 && x > 270) {
+    sendCommand('R');
+    delay(response_time);
+  }
+
+  // Claw Up (Wrist)
+  if (y > 60 && y < 80) {
+    sendCommand('G');
+    delay(response_time);
+  }
+
+  // Claw Down
+  if (y < 310 && y > 270) {
+    sendCommand('U');
+    delay(response_time);
+  }
+
+  // Move right (shoulder)
+  if (y2 >60 && y2 < 90) {
+    sendCommand('C');
+    delay(response_time);
+  }
+
+  // Move left
+  if (y2 < 310 && y2 > 270) {
+    sendCommand('c');
+    delay(response_time);
+  }
+
+  // Pinkie now its wrist 1
+  if (x2 > 48 && x2 < 65 && y2 < 55) {
+    sendCommand('Q');
+    delay(response_time);
+  }
+
+  if (x2 < 310 && x2 > 270) {
+    sendCommand('q');
+    delay(response_time);
+  }
+
+  /*Thumb
+  if (thumb >= thumb_high || thumb <= thumb_low) {
+    sendCommand('T');
+    delay(response_time);
+  }
+
+  // Finger
+  if (finger >= finger_high || finger <= finger_low) {
+    sendCommand('F');
+    delay(response_time);
+  }
+  */
+
+  else {
+    delay(5);
+  }
+
+  Serial.println("------------------------------");
+}
+
+void GetMpuValue1(const int MPU) {
+  Wire.beginTransmission(MPU);
+  Wire.write(0x3B);
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU, 14, true);
+
+  AcX1 = Wire.read() << 8 | Wire.read();
+  AcY1 = Wire.read() << 8 | Wire.read();
+  AcZ1 = Wire.read() << 8 | Wire.read();
+
+  Tmp1 = Wire.read() << 8 | Wire.read();
+
+  int xAng = map(AcX1, minVal, maxVal, -90, 90);
+  int yAng = map(AcY1, minVal, maxVal, -90, 90);
+  int zAng = map(AcZ1, minVal, maxVal, -90, 90);
+
+  GyX1 = Wire.read() << 8 | Wire.read();
+  GyY1 = Wire.read() << 8 | Wire.read();
+  GyZ1 = Wire.read() << 8 | Wire.read();
+
+  x = RAD_TO_DEG * (atan2(-yAng, -zAng) + PI) + 4;
+  y = RAD_TO_DEG * (atan2(-xAng, -zAng) + PI);
+  z = RAD_TO_DEG * (atan2(-yAng, -xAng) + PI);
+}
+
+void GetMpuValue2(const int MPU) {
+  Wire.beginTransmission(MPU);
+  Wire.write(0x3B);
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU, 14, true);
+
+  AcX2 = Wire.read() << 8 | Wire.read();
+  AcY2 = Wire.read() << 8 | Wire.read();
+  AcZ2 = Wire.read() << 8 | Wire.read();
+
+  Tmp2 = Wire.read() << 8 | Wire.read();
+
+  int xAng2 = map(AcX2, minVal2, maxVal2, -90, 90);
+  int yAng2 = map(AcY2, minVal2, maxVal2, -90, 90);
+  int zAng2 = map(AcZ2, minVal2, maxVal2, -90, 90);
+
+  GyX2 = Wire.read() << 8 | Wire.read();
+  GyY2 = Wire.read() << 8 | Wire.read();
+  GyZ2 = Wire.read() << 8 | Wire.read();
+
+  x2 = RAD_TO_DEG * (atan2(-yAng2, -zAng2) + PI) + 4;
+  y2 = RAD_TO_DEG * (atan2(-xAng2, -zAng2) + PI);
+  z2 = RAD_TO_DEG * (atan2(-yAng2, -xAng2) + PI);
+}
+
+void debug_flex() {
+  Serial.print("Thumb: ");
+  Serial.print(thumb);
+  Serial.print("\t");
+  Serial.print("thumb High: ");
+  Serial.print(thumb_high);
+  Serial.print("\t");
+  Serial.print("T Low: ");
+  Serial.print(thumb_low);
+  Serial.print("\t");
+
+  Serial.print("finger: ");
+  Serial.print(finger);
+  Serial.print("\t");
+  Serial.print("finger High: ");
+  Serial.print(finger_high);
+  Serial.print("\t");
+  Serial.print("finger Low: ");
+  Serial.print(finger_low);
+  Serial.print("\t");
+
+  Serial.print("Pinkie: ");
+  Serial.print(pinkie);
+  Serial.print("\t");
+  Serial.print("Pinkie High: ");
+  Serial.print(pinkie_high);
+  Serial.print("\t");
+  Serial.print("Pinkie Low: ");
+  Serial.print(pinkie_low);
+  Serial.print("\t");
+  Serial.println();
+}
